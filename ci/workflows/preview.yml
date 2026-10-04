@@ -1,0 +1,9 @@
+name: Build APK Artifact
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    uses: ./.github/workflows/trusttunnel-test.yml
+    secrets: inherit

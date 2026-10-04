@@ -1,0 +1,45 @@
+name: Release Build
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Version from nb4a.properties (for example 1.5.4)
+        required: true
+      publish:
+        description: Publish a new release after all checks pass
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  build:
+    uses: ./.github/workflows/trusttunnel-test.yml
+    secrets: inherit
+  publish:
+    if: ${{ inputs.publish }}
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: RX-PRO-arm64
+          path: artifacts
+      - name: Publish verified arm64 APK without overwriting releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          VERSION=$(sed -n 's/^VERSION_NAME=//p' nb4a.properties)
+          test "$RELEASE_TAG" = "$VERSION"
+          grep -qx 'PACKAGE_NAME=com.rixxx.rxpro' nb4a.properties
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo 'Release already exists; refusing to overwrite it.'
+            exit 1
+          fi
+          (cd artifacts && sha256sum -c SHA256SUMS.txt)
+          gh release create "$RELEASE_TAG" artifacts/*.apk artifacts/SHA256SUMS.txt \
+            --target "$GITHUB_SHA" --title "RX-PRO $RELEASE_TAG" \
+            --notes 'Android arm64. TrustTunnel HTTP/2 with embedded adapter, subscription import, profile editing and connection lifecycle fixes. See README for supported options. Signed APK and SHA256 checksums included.'
