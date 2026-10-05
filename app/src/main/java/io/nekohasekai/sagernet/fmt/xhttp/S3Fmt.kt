@@ -10,8 +10,82 @@ import okio.ByteString.Companion.encodeUtf8
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
+import io.nekohasekai.sagernet.fmt.TAG_PROXY
+import moe.matsuri.nb4a.SingBoxOptions.*
 
 val XhttpBean.isS3: Boolean get() = !s3Json.isNullOrBlank()
+
+/** Do not display accidentally pasted credentials as a profile title. */
+fun safeS3Name(value: String?): String {
+    val name = value.orEmpty().trim()
+    val lower = name.lowercase()
+    return if (name.isEmpty() || name.length > 80 || name.any { it.isISOControl() } ||
+        listOf("://", "%3a", "s3=", "secretkey", "accesskey").any { it in lower }) "VK S3" else name
+}
+
+/** DNS+TLS verified 2026-10-05. This is an explicit beta snapshot, not dynamic DNS.
+ * If VK changes IP, fail closed until an updated APK; never fall back to public DNS.
+ * HTTPS Host/SNI and certificate verification continue to use the original hostname.
+ */
+fun s3BootstrapAddress(host: String): String = when (host) {
+    "hb.ru-msk.vkcloud-storage.ru", "hb.vkcloud-storage.ru" -> "95.163.53.117"
+    else -> throw IllegalArgumentException("No verified VK bootstrap address for S3 endpoint")
+}
+
+/** Strict single-profile S3 policy; only the local storage mapping can dial outside.
+ * Application DNS (including PTR) goes through SOCKS/VLESS, not the phone's resolver.
+ */
+fun applyS3Policy(options: MyOptions, bean: XhttpBean, forTest: Boolean) {
+    val mapping = options.inbounds.filterIsInstance<Inbound_DirectOptions>().single()
+    require(mapping.listen == LOCALHOST && mapping.listen_port == bean.finalPort) { "Invalid S3 mapping" }
+    mapping.override_address = s3BootstrapAddress(bean.serverAddress)
+    mapping.override_port = 443
+    mapping.network = "tcp"
+    mapping.sniff = false
+    mapping.sniff_override_destination = false
+    mapping.domain_strategy = ""
+    val proxy = options.outbounds.single { it.asMap()["tag"] == TAG_PROXY }
+    require(proxy.asMap()["type"] == "socks" && proxy.asMap()["server"] == LOCALHOST) { "Invalid S3 proxy" }
+    options.outbounds = mutableListOf(proxy, Outbound().apply {
+        type = "direct"
+        tag = "s3-storage"
+    })
+    options.route = RouteOptions().apply {
+        auto_detect_interface = true
+        final_ = TAG_PROXY
+        rules = mutableListOf(
+            Rule_DefaultOptions().apply { inbound = listOf(mapping.tag); outbound = "s3-storage" },
+            Rule_DefaultOptions().apply { port = listOf(53); action = "hijack-dns" },
+            Rule_DefaultOptions().apply { protocol = listOf("dns"); action = "hijack-dns" },
+            Rule_DefaultOptions().apply { ip_cidr = listOf("224.0.0.0/3", "ff00::/8"); action = "reject" }
+        )
+    }
+    options.dns = DNSOptions().apply {
+        independent_cache = true
+        final_ = "s3-dns"
+        servers = mutableListOf(DNSServerOptions().apply {
+            tag = "s3-dns"
+            // Literal IP with a valid TLS certificate: no DNS bootstrap dependency.
+            address = "https://1.1.1.1/dns-query"
+            detour = TAG_PROXY
+        })
+        rules = mutableListOf()
+        if (!forTest) {
+            fakeip = DNSFakeIPOptions().apply {
+                enabled = true
+                inet4_range = "198.18.0.0/15"
+                inet6_range = "fc00::/18"
+            }
+            servers.add(DNSServerOptions().apply { tag = "s3-fake"; address = "fakeip" })
+            rules.add(DNSRule_DefaultOptions().apply {
+                inbound = listOf("tun-in")
+                query_type = listOf("A", "AAAA")
+                server = "s3-fake"
+                disable_cache = true
+            })
+        }
+    }
+}
 
 fun isS3Link(link: String): Boolean = runCatching {
     ("https://" + link.substringAfter("://")).toHttpUrlOrNull()?.queryParameter("type") == "xdrive"
@@ -66,7 +140,7 @@ fun parseS3(link: String): XhttpBean {
         uuid = id
         s3Json = storage.toString()
         vlessEncryption = encryption
-        name = url.fragment ?: "VK S3"
+        name = safeS3Name(url.fragment)
         security = "none"
     }
 }
@@ -77,7 +151,7 @@ fun XhttpBean.toS3Uri(): String {
         .addQueryParameter("type", "xdrive").addQueryParameter("service", "s3")
         .addQueryParameter("encryption", vlessEncryption)
         .addQueryParameter("s3", s3Json.encodeUtf8().base64Url())
-        .fragment(name).toLink("vless")
+        .fragment(safeS3Name(name)).toLink("vless")
 }
 
 fun XhttpBean.buildS3Config(port: Int): String {

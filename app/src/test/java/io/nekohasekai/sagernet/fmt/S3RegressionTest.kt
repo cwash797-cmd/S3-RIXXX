@@ -75,4 +75,86 @@ class S3RegressionTest {
         assertNotEquals(moe.matsuri.nb4a.Protocols.Deduplication(one, "VLESS-S3"),
             moe.matsuri.nb4a.Protocols.Deduplication(two, "VLESS-S3"))
     }
+    @Test fun pastedLinksNeverBecomeVisibleNames() {
+        for (name in listOf("S3-test-vless://fixture@localhost", "prefix-vless%3A%2F%2Fsecret",
+            "s3=fixture-secret", "accessKey=fixture", "x".repeat(81))) {
+            val bean = parseS3(link().substringBefore('#') + "#" + URLEncoder.encode(name, "UTF-8"))
+            assertEquals("VK S3", bean.name)
+            bean.name = name // Also cover existing beta1 records without rewriting the DB.
+            assertEquals("VK S3", bean.displayName())
+            assertEquals("VK S3", parseS3(bean.toUri()).name)
+        }
+        assertEquals("Мой VK", safeS3Name(" Мой VK "))
+    }
+
+    private fun policyFixture(forTest: Boolean = false): moe.matsuri.nb4a.SingBoxOptions.MyOptions {
+        val bean = parseS3(link()).apply { finalAddress = LOCALHOST; finalPort = 29101 }
+        val options = moe.matsuri.nb4a.SingBoxOptions.MyOptions().apply {
+            inbounds = mutableListOf(
+                moe.matsuri.nb4a.SingBoxOptions.Inbound_DirectOptions().apply {
+                    type = "direct"; tag = "storage-mapping"; listen = LOCALHOST; listen_port = 29101
+                    override_address = bean.serverAddress; override_port = 443
+                },
+                moe.matsuri.nb4a.SingBoxOptions.Inbound_MixedOptions().apply {
+                    type = "mixed"; tag = "mixed-in"; listen = LOCALHOST; listen_port = 29102
+                }
+            )
+            outbounds = mutableListOf(
+                moe.matsuri.nb4a.SingBoxOptions.Outbound_SocksOptions().apply {
+                    type = "socks"; tag = TAG_PROXY; server = LOCALHOST; server_port = 29103
+                },
+                moe.matsuri.nb4a.SingBoxOptions.Outbound().apply { type = "direct"; tag = "bypass" }
+            )
+        }
+        applyS3Policy(options, bean, forTest)
+        return options
+    }
+
+    @Test fun strictPolicyHasNoExternalDnsOrBypassAndPreservesTlsHost() {
+        val options = policyFixture()
+        val json = JSONObject(moe.matsuri.nb4a.utils.JavaUtil.gson.toJson(options.asMap()))
+        val mapping = json.getJSONArray("inbounds").getJSONObject(0)
+        assertEquals("95.163.53.117", mapping.getString("override_address"))
+        assertEquals(443, mapping.getInt("override_port"))
+        assertEquals("tcp", mapping.getString("network"))
+        assertEquals(2, json.getJSONArray("outbounds").length())
+        val direct = json.getJSONArray("outbounds").getJSONObject(1)
+        assertEquals("s3-storage", direct.getString("tag"))
+        assertFalse(direct.has("override_address")) // Destination is fixed at the only routed mapping inbound.
+        val route = json.getJSONObject("route")
+        assertEquals(TAG_PROXY, route.getString("final"))
+        assertEquals("storage-mapping", route.getJSONArray("rules").getJSONObject(0).getJSONArray("inbound").getString(0))
+        assertFalse(json.toString().contains("223.5.5.5"))
+        assertFalse(json.toString().contains("dns-local"))
+        val dns = json.getJSONObject("dns")
+        val resolver = dns.getJSONArray("servers").getJSONObject(0)
+        assertEquals("https://1.1.1.1/dns-query", resolver.getString("address"))
+        assertEquals(TAG_PROXY, resolver.getString("detour"))
+        val types = dns.getJSONArray("rules").getJSONObject(0).getJSONArray("query_type")
+        assertEquals("[\"A\",\"AAAA\"]", types.toString())
+        assertEquals("s3-dns", dns.getString("final")) // PTR does not enter fakeip.
+        assertEquals("https://hb.ru-msk.vkcloud-storage.ru", storage().getString("endpoint"))
+        java.io.File("build/s3-policy-vpn.json").apply { parentFile.mkdirs(); writeText(json.toString(2)) }
+    }
+
+    @Test fun urlTestAlsoUsesTunneledDnsWithoutFakeip() {
+        val json = JSONObject(moe.matsuri.nb4a.utils.JavaUtil.gson.toJson(policyFixture(true).asMap()))
+        val dns = json.getJSONObject("dns")
+        assertFalse(dns.has("fakeip"))
+        assertEquals(1, dns.getJSONArray("servers").length())
+        assertEquals(TAG_PROXY, dns.getJSONArray("servers").getJSONObject(0).getString("detour"))
+        java.io.File("build/s3-policy-test.json").apply { parentFile.mkdirs(); writeText(json.toString(2)) }
+    }
+
+    @Test fun unknownBootstrapHostFailsClosed() {
+        assertEquals("95.163.53.117", s3BootstrapAddress("hb.vkcloud-storage.ru"))
+        assertThrows(IllegalArgumentException::class.java) { s3BootstrapAddress("untrusted.invalid") }
+    }
+
+    @Test fun invalidMappingFailsClosed() {
+        val options = policyFixture()
+        val bean = parseS3(link()).apply { finalPort = 9999 }
+        assertThrows(IllegalArgumentException::class.java) { applyS3Policy(options, bean, false) }
+    }
+
 }
