@@ -160,6 +160,22 @@ Build Tools 35.0.0, NDK 27.0.12077973. Старый XHTTP-бинарник не 
 - `./gradlew :app:testOssDebugUnitTest :app:assembleOssDebug` — JVM-тесты и APK
   после сборки libcore/TrustTunnel, загрузки плагинов и assets.
 
-CI templates в `ci/workflows` не активны: подключению GitHub не хватает права
-Workflows write. Не копируйте старые release templates без адаптации версии,
-пакета и подписи. Debug APK предназначен для тестирования, не массовой раздачи.
+Активный workflow: `.github/workflows/s3-beta.yml` (PR в main, push в main и
+ручной запуск). Нативный job использует Go 1.27.1, Android stack — Go 1.25.0
+и отдельный workspace-local GOPATH. Пользовательские credentials и release signing
+secrets не нужны. Старые шаблоны в `ci/workflows` для S3 beta не используются.
+
+В успешном запуске Actions скачайте:
+- `RX-PRO-S3-beta-arm64-debug` — arm64 APK и SHA256SUMS.txt;
+- `S3-server-linux-amd64` — серверный tar.gz и SHA256SUMS.txt;
+- `S3-JVM-regression-reports` и `S3-local-integration-report` — результаты тестов.
+
+CI проверяет подпись, пакет `com.rixxx.rxpro.s3.debug`, наличие шести native cores
+и побайтовое совпадение встроенного `libs3xray.so` с собранным S3 executable.
+APK использует тестовый debug-ключ, который может меняться между CI-запусками.
+Если Android отвергает обновление из-за другой подписи, сначала сохраните профили
+в безопасном месте, затем переустановите beta. Удаление приложения стирает его данные.
+Стабильный RX-PRO имеет другой пакет и не затрагивается.
+
+Debug APK предназначен для тестирования, не массовой раздачи. Зелёный CI не заменяет
+приёмку на реальном VK, телефоне и в БС по списку выше.
