@@ -45,6 +45,11 @@ public class XhttpBean extends AbstractBean {
     public String realitySpiderX;
 
     @Override
+    public String displayName() {
+        return s3Json != null && !s3Json.isEmpty() ? S3FmtKt.safeS3Name(name) : super.displayName();
+    }
+
+    @Override
     public void initializeDefaultValues() {
         super.initializeDefaultValues();
         if (uuid == null) uuid = "";

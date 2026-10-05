@@ -42,6 +42,15 @@ class ProfileTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             profile(self.link, self.client, bad, 10001)
 
+    def test_credential_bearing_names_are_sanitized(self):
+        for name in ["prefix-vless://fixture@localhost", "s3=fixture", "accessKey=fixture", "x" * 81]:
+            link, _, _ = profile(self.link.split("#")[0] + "#" + urllib.parse.quote(name), self.client, self.server, 10001)
+            self.assertEqual(urllib.parse.unquote(urllib.parse.urlsplit(link).fragment), "VK S3")
+
+    def test_normal_name_is_preserved(self):
+        link, _, _ = profile(self.link.split("#")[0] + "#" + urllib.parse.quote("Мой VK"), self.client, self.server, 10001)
+        self.assertEqual(urllib.parse.unquote(urllib.parse.urlsplit(link).fragment), "Мой VK")
+
     def test_never_overwrites_existing_secret_file(self):
         root = Path(__file__).resolve().parents[1] / ".lab"
         root.mkdir(exist_ok=True)

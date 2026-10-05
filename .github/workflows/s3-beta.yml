@@ -50,7 +50,7 @@ jobs:
           install -m 644 LICENSE test-dist/server/CLIENT-LICENSE
           install -m 644 .lab/xray-src/LICENSE test-dist/server/XRAY-LICENSE
           install -m 644 .lab/gopath/pkg/mod/github.com/aws/aws-sdk-go-v2@v1.36.3/LICENSE.txt test-dist/server/AWS-LICENSE
-          tar -czf test-dist/s3_rixxx_server_linux_amd64_beta1.tar.gz -C test-dist/server .
+          tar -czf test-dist/s3_rixxx_server_linux_amd64_beta2.tar.gz -C test-dist/server .
           cd test-dist
           sha256sum *.tar.gz > SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
@@ -96,7 +96,7 @@ jobs:
       - name: Verify beta identity and install pinned SDK
         run: |
           grep -qx 'PACKAGE_NAME=com.rixxx.rxpro.s3' nb4a.properties
-          grep -qx 'VERSION_NAME=1.6.0-s3-beta1' nb4a.properties
+          grep -qx 'VERSION_NAME=1.6.0-s3-beta2' nb4a.properties
           "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install 'ndk;27.0.12077973' 'build-tools;35.0.0' 'platforms;android-35'
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.0.12077973" >> "$GITHUB_ENV"
           mkdir -p "$GOPATH/bin" "$GOCACHE" libcore/.build
@@ -118,6 +118,24 @@ jobs:
         run: |
           chmod +x app/executableSo/arm64-v8a/libs3xray.so
           ./gradlew :app:testOssDebugUnitTest :app:assembleOssDebug --no-daemon --max-workers=2 -Dorg.gradle.jvmargs='-Xmx3g -XX:ActiveProcessorCount=2' -Pkotlin.compiler.execution.strategy=in-process --console=plain
+      - name: Validate S3 routing fixtures with the pinned native core
+        run: |
+          mkdir -p .lab/bin
+          (cd .lab/sources/sing-box && go build -mod=readonly -tags 'with_gvisor,with_quic,with_wireguard,with_utls,with_clash_api' -o "$GITHUB_WORKSPACE/.lab/bin/sing-box-policy" ./cmd/sing-box)
+          python3 - <<'PYTHON'
+          import pathlib, subprocess, time
+          for config in pathlib.Path('app/build').glob('s3-policy-*.json'):
+              checked = subprocess.run(['.lab/bin/sing-box-policy', 'check', '-c', str(config)], capture_output=True, text=True)
+              assert checked.returncode == 0 and 'FATAL' not in checked.stderr, checked.stderr
+              with pathlib.Path('.lab/policy-startup.log').open('w+') as log:
+                  process = subprocess.Popen(['.lab/bin/sing-box-policy', 'run', '-c', str(config)], stdout=log, stderr=log)
+                  try:
+                      time.sleep(1)
+                      log.flush(); log.seek(0)
+                      assert process.poll() is None, log.read()
+                  finally:
+                      process.terminate(); process.wait(timeout=10)
+          PYTHON
       - name: Verify APK identity, signature and embedded cores
         run: |
           APK=$(find app/build/outputs/apk/oss/debug -name '*arm64-v8a*.apk' -print -quit)

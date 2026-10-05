@@ -41,6 +41,14 @@ def load_storage(path, server=False):
     return result
 
 
+def safe_name(value):
+    name = urllib.parse.unquote(value).strip()
+    if (not name or len(name) > 80 or any(ord(c) < 32 or ord(c) == 127 for c in name)
+            or any(s in name.lower() for s in ("://", "%3a", "s3=", "secretkey", "accesskey"))):
+        return "VK S3"
+    return name
+
+
 def profile(link, client, server, panel_port, encryption_override=None):
     u = urllib.parse.urlsplit(link.strip())
     if u.scheme != "vless" or not u.username or not 1 <= panel_port <= 65535:
@@ -88,7 +96,7 @@ def profile(link, client, server, panel_port, encryption_override=None):
     payload = dict(client, version=1, prefix=prefix)
     encoded = base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode().rstrip("=")
     params = urllib.parse.urlencode({"type": "xdrive", "service": "s3", "encryption": encryption, "s3": encoded})
-    name = urllib.parse.quote(urllib.parse.unquote(u.fragment) or "VK S3")
+    name = urllib.parse.quote(safe_name(u.fragment), safe="")
     return f"vless://{identity}@{host}:443?{params}#{name}", bridge, pc
 
 

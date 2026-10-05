@@ -251,6 +251,11 @@ abstract class BoxInstance(
                         )
 
                         processes.start(commands, envMap)
+                        if (bean.isS3) {
+                            // Greeting only: VK mapping starts with sing-box below.
+                            io.nekohasekai.sagernet.fmt.trusttunnel.awaitLocalSocks(port)
+                            Logs.i("S3 local SOCKS5 ready; VK-only mapping, tunneled DNS, bootstrap snapshot 2026-10-05")
+                        }
                     }
 
                     bean is HysteriaBean -> {
